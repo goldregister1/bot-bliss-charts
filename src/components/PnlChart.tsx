@@ -54,6 +54,7 @@ const AXIS_COLOR = "#8b949e";
 const ZERO_LINE_COLOR = "rgba(255,255,255,0.15)";
 const MIN_HEIGHT = 200;
 const MAX_HEIGHT = 800;
+const MIN_WIDTH = 300;
 
 // --- Helpers ---
 
@@ -72,23 +73,37 @@ function pnlColor(v: number) {
 
 // --- Resize Hook ---
 
-function useVerticalResize(initialHeight: number) {
-  const [height, setHeight] = useState(initialHeight);
-  const dragging = useRef(false);
-  const startY = useRef(0);
-  const startH = useRef(0);
+type ResizeDir = "bottom" | "right" | "corner";
 
-  const onMouseDown = useCallback(
-    (e: React.MouseEvent) => {
+function useResize(initialHeight: number) {
+  const [height, setHeight] = useState(initialHeight);
+  const [width, setWidth] = useState<number | null>(null);
+  const containerRef = useRef<HTMLDivElement>(null);
+  const dragging = useRef(false);
+  const dir = useRef<ResizeDir>("bottom");
+  const startPos = useRef({ x: 0, y: 0 });
+  const startSize = useRef({ w: 0, h: 0 });
+
+  const onResizeStart = useCallback(
+    (direction: ResizeDir) => (e: React.MouseEvent) => {
       e.preventDefault();
       dragging.current = true;
-      startY.current = e.clientY;
-      startH.current = height;
+      dir.current = direction;
+      startPos.current = { x: e.clientX, y: e.clientY };
+      const currentW = containerRef.current?.offsetWidth ?? 600;
+      startSize.current = { w: width ?? currentW, h: height };
 
       const onMove = (ev: MouseEvent) => {
         if (!dragging.current) return;
-        const delta = ev.clientY - startY.current;
-        setHeight(Math.min(MAX_HEIGHT, Math.max(MIN_HEIGHT, startH.current + delta)));
+        const dx = ev.clientX - startPos.current.x;
+        const dy = ev.clientY - startPos.current.y;
+        const d = dir.current;
+        if (d === "bottom" || d === "corner") {
+          setHeight(Math.min(MAX_HEIGHT, Math.max(MIN_HEIGHT, startSize.current.h + dy)));
+        }
+        if (d === "right" || d === "corner") {
+          setWidth(Math.max(MIN_WIDTH, startSize.current.w + dx));
+        }
       };
       const onUp = () => {
         dragging.current = false;
@@ -98,10 +113,10 @@ function useVerticalResize(initialHeight: number) {
       window.addEventListener("mousemove", onMove);
       window.addEventListener("mouseup", onUp);
     },
-    [height]
+    [height, width]
   );
 
-  return { height, onMouseDown };
+  return { height, width, onResizeStart, containerRef };
 }
 
 // --- Sub-components ---
@@ -186,31 +201,45 @@ function NeonDefs() {
 
 // --- Resize Handle ---
 
-function ResizeHandle({ onMouseDown }: { onMouseDown: (e: React.MouseEvent) => void }) {
+function ResizeHandleBottom({ onMouseDown }: { onMouseDown: (e: React.MouseEvent) => void }) {
   return (
     <div
       onMouseDown={onMouseDown}
-      style={{
-        height: 8,
-        cursor: "ns-resize",
-        display: "flex",
-        alignItems: "center",
-        justifyContent: "center",
-        borderTop: "1px solid #21262d",
-        userSelect: "none",
-      }}
+      style={{ height: 8, cursor: "ns-resize", display: "flex", alignItems: "center", justifyContent: "center", userSelect: "none" }}
     >
       <div
-        style={{
-          width: 40,
-          height: 3,
-          borderRadius: 2,
-          background: "#30363d",
-          transition: "background 0.15s",
-        }}
+        style={{ width: 40, height: 3, borderRadius: 2, background: "#30363d", transition: "background 0.15s" }}
         onMouseEnter={(e) => (e.currentTarget.style.background = "#58a6ff")}
         onMouseLeave={(e) => (e.currentTarget.style.background = "#30363d")}
       />
+    </div>
+  );
+}
+
+function ResizeHandleRight({ onMouseDown }: { onMouseDown: (e: React.MouseEvent) => void }) {
+  return (
+    <div
+      onMouseDown={onMouseDown}
+      style={{ position: "absolute", right: 0, top: 0, bottom: 0, width: 8, cursor: "ew-resize", display: "flex", alignItems: "center", justifyContent: "center", userSelect: "none" }}
+    >
+      <div
+        style={{ width: 3, height: 40, borderRadius: 2, background: "#30363d", transition: "background 0.15s" }}
+        onMouseEnter={(e) => (e.currentTarget.style.background = "#58a6ff")}
+        onMouseLeave={(e) => (e.currentTarget.style.background = "#30363d")}
+      />
+    </div>
+  );
+}
+
+function ResizeHandleCorner({ onMouseDown }: { onMouseDown: (e: React.MouseEvent) => void }) {
+  return (
+    <div
+      onMouseDown={onMouseDown}
+      style={{ position: "absolute", right: 0, bottom: 0, width: 14, height: 14, cursor: "nwse-resize", userSelect: "none", zIndex: 2 }}
+    >
+      <svg width="10" height="10" viewBox="0 0 10 10" style={{ position: "absolute", right: 2, bottom: 2 }}>
+        <path d="M9 1L1 9M9 5L5 9M9 8L8 9" stroke="#30363d" strokeWidth="1.5" strokeLinecap="round" />
+      </svg>
     </div>
   );
 }
@@ -224,7 +253,7 @@ const PnlChart: React.FC<PnlChartProps> = ({
   variant = "minimal",
 }) => {
   const botIds = useMemo(() => bots.map((b) => b.botId), [bots]);
-  const { height, onMouseDown } = useVerticalResize(360);
+  const { height, width, onResizeStart, containerRef } = useResize(360);
 
   const data = useMemo(
     () =>
@@ -269,9 +298,18 @@ const PnlChart: React.FC<PnlChartProps> = ({
     />
   );
 
+  const containerStyle: React.CSSProperties = {
+    background: BG,
+    borderRadius: 8,
+    padding: "16px 12px 0",
+    position: "relative",
+    width: width ?? "100%",
+    maxWidth: "100%",
+  };
+
   if (variant === "split-area") {
     return (
-      <div style={{ background: BG, borderRadius: 8, padding: "16px 12px 0" }}>
+      <div ref={containerRef} style={containerStyle}>
         <ChartLegend bots={bots} mode={mode} colors={LINE_COLORS} />
         <ResponsiveContainer width="100%" height={height}>
           <AreaChart data={data}>
@@ -305,13 +343,15 @@ const PnlChart: React.FC<PnlChartProps> = ({
             ))}
           </AreaChart>
         </ResponsiveContainer>
-        <ResizeHandle onMouseDown={onMouseDown} />
+        <ResizeHandleBottom onMouseDown={onResizeStart("bottom")} />
+        <ResizeHandleRight onMouseDown={onResizeStart("right")} />
+        <ResizeHandleCorner onMouseDown={onResizeStart("corner")} />
       </div>
     );
   }
 
   return (
-    <div style={{ background: BG, borderRadius: 8, padding: "16px 12px 0" }}>
+    <div ref={containerRef} style={containerStyle}>
       <ChartLegend bots={bots} mode={mode} colors={LINE_COLORS} />
       <ResponsiveContainer width="100%" height={height}>
         <LineChart data={data}>
@@ -342,7 +382,9 @@ const PnlChart: React.FC<PnlChartProps> = ({
           ))}
         </LineChart>
       </ResponsiveContainer>
-      <ResizeHandle onMouseDown={onMouseDown} />
+      <ResizeHandleBottom onMouseDown={onResizeStart("bottom")} />
+      <ResizeHandleRight onMouseDown={onResizeStart("right")} />
+      <ResizeHandleCorner onMouseDown={onResizeStart("corner")} />
     </div>
   );
 };
